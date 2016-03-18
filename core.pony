@@ -1,23 +1,43 @@
+use "hw"
 use "files"
 use "collections"
 
-class CPU
-  var mem: Array[U16] = Array[U16].init(where from = 0, len = 0x10000)
-  var regs: Array[U16] = Array[U16].init(where from = 0, len = 8)
+class CPUState
+  var mem: Array[U16] iso
+  var regs: Array[U16] iso = recover iso Array[U16].init(where from = 0, len = 8) end
   var pc: U16 = 0
   var ex: U16 = 0
   var sp: U16 = 0
   var ia: U16 = 0
 
-  var skipping: Bool = false
+  new create(m: Array[U16] iso) =>
+    mem = consume m
 
+  fun ref push(x: U16) =>
+    sp = sp - 1
+    try mem(sp.usize()) = x end
+
+  fun ref pop(): U16 =>
+    let r = try mem(sp.usize()) else 0 end
+    sp = sp + 1
+    r
+
+actor CPU
+  var _state: (CPUState iso | None) = None
   var _intQueueing: Bool = false
   var _intQueue: List[U16] = List[U16]()
 
+  var _skipping: Bool = false
+
   let _env: Env
+
+  var _hardware: Array[Device tag]
 
   new fromFile(env: Env, file: FilePath) =>
     _env = env
+    let serial: Device tag = HWSerial(env, this)
+    _hardware = [serial]
+    var m = recover Array[U16].init(where from = 0, len = 0x10000) end
     try
       with f = OpenFile(file) as File do
         var contents: Array[U8] iso = f.read(f.size())
@@ -25,56 +45,86 @@ class CPU
         try
           while i < contents.size() do
             let c = (contents(i).u16() << 8) or contents(i + 1).u16()
-            mem(i / 2) = c
+            m(i / 2) = c
             i = i + 2
           end
         else
           _env.out.print("Failed to load the binary file")
-          return
+          @exit[None](U32(1))
         end
       end
     else
       _env.out.print("Failed to open target file")
     end
 
-  fun ref run() =>
-    while true do
+    let s = recover CPUState(consume m) end
+
+    // Starts the CPU running with the first behavior call.
+    run(consume s)
+
+  // Here's the flow of behaviors in the system:
+  // run(CPUState iso): Entry point that begins the next instruction cycle.
+  //   Called at the end of create() and by async opcodes like HWI.
+  // tickHardware(USize, CPUState iso): Called repeatedly with successively
+  //   higher indexes. This calls tick(USize, CPUState iso) on the hardware at
+  //   index, which should call back tickHardware(index + 1, state).
+  //   When there's no hardware at that index, calls through to _exec()
+  // _exec(): Internal, synchronous opcode runner. Decodes the next op, and
+  //   calls it. Most ops are synchronous, so they just end by calling _continue
+  //   Any async ops like HWI will eventually call run().
+  be run(st: CPUState iso) =>
+    _tickHardware(0, consume st)
+
+  fun ref _tickHardware(index: USize, st: CPUState iso) =>
+    if index < _hardware.size() then
+      try
+        let hw = _hardware(index)
+        hw.tick(index, consume st)
+      end
+    else
+      // Couldn't look up the _hardware at index, so we've run out of hardware.
+      // Call through to the next round of the behavior: checking for
+      // interrupts.
+      _state = consume st
       _exec()
     end
 
+  be triggerInterrupt(msg: U16) =>
+    _intQueue.push(msg)
+
+  be hardwareDone(index: USize, st: CPUState iso) =>
+    _tickHardware(index + 1, consume st)
 
   fun ref _exec() =>
-    """
-    Runs a single cycle of the CPU.
-
-    Basic steps:
-    - Tick the hardware.
-    - Check for interrupts.
-    - Read and execute an instruction.
-    """
-
-    _tickHardware()
     _checkInterrupts()
     _execOp()
 
+  // Shim for the synchronous ops, which is most of them.
+  // Just calls the async _run with the state.
+  fun ref _continue() =>
+    match _state = None
+    | None => _env.out.print("Impossible: _continue called with no state")
+    | let st: CPUState iso => run(consume st)
+    end
 
-  fun read(addr: U16): U16 => try mem(addr.usize()) else 0 end
 
-  fun pcPeek(): U16 => read(pc)
-  fun ref pcGet(): U16 => read(pc = pc + 1)
+  fun read(addr: U16): U16 => try (_state as CPUState iso).mem(addr.usize()) else 0 end
+
+  fun pcPeek(): U16 => try read((_state as CPUState iso).pc) else 0 end
+  fun ref pcGet(): U16 =>
+    try
+      let pc = (_state as CPUState iso).pc
+      read(pc)
+      (_state as CPUState iso).pc = pc + 1
+    else
+      0
+    end
 
   fun ref write(addr: U16, value: U16) =>
-    try mem(addr.usize()) = value end
+    try (_state as CPUState iso).mem(addr.usize()) = value end
 
-  fun ref push(x: U16) =>
-    sp = sp - 1
-    write(sp, x)
-  fun ref pop(): U16 =>
-    let r = read(sp)
-    sp = sp + 1
-
-
-  fun ref _tickHardware() => None
+  fun ref push(x: U16) => try (_state as CPUState iso).push(x) end
+  fun ref pop(): U16 => try (_state as CPUState iso).pop() else 0 end
 
   fun ref _checkInterrupts() =>
     // At most one interrupt is handled between real instructions.
@@ -86,24 +136,27 @@ class CPU
     // Otherwise, we pop the first one.
     try
       let int = _intQueue.shift()
-      if ia != 0 then
+      let st = (_state = None) as CPUState iso^
+      //let st = match _state = None | let s: CPUState iso => consume s else error end
+      if st.ia != 0 then
         _intQueueing = true
-        push(pc)
-        push(regs(0))
-        regs(0) = int
-        pc = ia
+        st.push(st.pc)
+        st.push(st.regs(0))
+        st.regs(0) = int
+        st.pc = st.ia
       end
+      _state = consume st
     end
 
   fun ref _execOp() =>
     // Read the word at PC, decode it, and call the right function.
-    let op = read(pc)
+    let op = try read((_state as CPUState iso).pc) else 0 end
     let opcode = op and 31
     let a = (op >> 10) and 63
     let b = (op >> 5) and 31
 
     // Special case for skipping.
-    if skipping then
+    if _skipping then
       // We won't really perform this instruction. Instead, we consume its
       // arguments without evaluating them (PUSH, POP are destructive).
       consumeArg(a)
@@ -113,22 +166,22 @@ class CPU
 
       // If the operation skipping was a branch (0x10 <= opcode < 0x18) then we
       // continue skipping.
-      skipping = (0x10 <= opcode) and (opcode < 0x18)
+      _skipping = (0x10 <= opcode) and (opcode < 0x18)
       return
     end
 
     if opcode == 0 then
       // Special opcodes. a is the argument, b is the actual opcode.
       match b
-      | 0x01 => op_jsr(a)
-      | 0x08 => op_int(a)
-      | 0x09 => op_iag(a)
-      | 0x0a => op_ias(a)
-      | 0x0b => op_rfi(a)
-      | 0x0c => op_iaq(a)
-      | 0x10 => op_hwn(a)
-      | 0x11 => op_hwq(a)
-      | 0x12 => op_hwi(a)
+      | 0x01 => op_jsr(a); _continue()
+      | 0x08 => op_int(a); _continue()
+      | 0x09 => op_iag(a); _continue()
+      | 0x0a => op_ias(a); _continue()
+      | 0x0b => op_rfi(a); _continue()
+      | 0x0c => op_iaq(a); _continue()
+      | 0x10 => op_hwn(a); _continue()
+      | 0x11 => op_hwq(a) // Async, no continue
+      | 0x12 => op_hwi(a) // Async, no continue
       else
         _env.out.print("ERROR: Illegal special opcode " + b.string())
       end
@@ -164,33 +217,36 @@ class CPU
       else
         _env.out.print("ERROR: Illegal normal opcode " + opcode.string())
       end
+
+      // All of the normal ops are synchronous, so always _continue.
+      _continue()
     end
 
   fun ref readArg(arg: U16, movePC: Bool = true): U16 =>
     try
       if arg < 8 then
-        regs(arg.usize())
+        (_state as CPUState iso).regs(arg.usize())
       elseif arg < 16 then
-        read(regs((arg - 8).usize()))
+        read((_state as CPUState iso).regs((arg - 8).usize()))
       elseif arg < 24 then
         let next = if movePC then pcGet() else pcPeek() end
-        read(regs((arg - 16).usize()) + next)
+        read((_state as CPUState iso).regs((arg - 16).usize()) + next)
       elseif arg == 0x18 then // POP/PEEK
         if movePC then // POP
-          read(sp = sp + 1)
+          pop()
         else // PEEK
-          read(sp)
+          read((_state as CPUState iso).sp)
         end
       elseif arg == 0x19 then // [SP]/PEEK
-        read(sp)
+        read((_state as CPUState iso).sp)
       elseif arg == 0x1a then // PICK n
-        read(sp + (if movePC then pcGet() else pcPeek() end))
+        read((_state as CPUState iso).sp + (if movePC then pcGet() else pcPeek() end))
       elseif arg == 0x1b then // SP
-        sp
+        (_state as CPUState iso).sp
       elseif arg == 0x1c then // PC
-        pc
+        (_state as CPUState iso).pc
       elseif arg == 0x1d then // EX
-        ex
+        (_state as CPUState iso).ex
       elseif arg == 0x1e then // [next word]
         read(if movePC then pcGet() else pcPeek() end)
       elseif arg == 0x1f then // next word (literal)
@@ -205,24 +261,23 @@ class CPU
   fun ref writeArg(arg: U16, value: U16) =>
     try
       if arg < 8 then
-        regs(arg.usize()) = value
+        (_state as CPUState iso).regs(arg.usize()) = value
       elseif arg < 16 then
-        write(regs((arg - 8).usize()), value)
+        write((_state as CPUState iso).regs((arg - 8).usize()), value)
       elseif arg < 24 then
-        write(regs((arg - 16).usize()) + pcGet(), value)
+        write((_state as CPUState iso).regs((arg - 16).usize()) + pcGet(), value)
       elseif arg == 0x18 then // PUSH
-        sp = sp - 1
-        write(sp, value)
+        push(value)
       elseif arg == 0x19 then // PEEK
-        write(sp, value)
+        write((_state as CPUState iso).sp, value)
       elseif arg == 0x1a then // PICK n
-        write(sp + pcGet(), value)
+        write((_state as CPUState iso).sp + pcGet(), value)
       elseif arg == 0x1b then // SP
-        sp = value
+        (_state as CPUState iso).sp = value
       elseif arg == 0x1c then // PC
-        pc = value
+        (_state as CPUState iso).pc = value
       elseif arg == 0x1d then // EX
-        ex = value
+        (_state as CPUState iso).ex = value
       elseif arg == 0x1e then // [next word]
         write(pcGet(), value)
       end
@@ -234,7 +289,11 @@ class CPU
     if ((0x10 <= arg) and (arg < 0x18)) or (arg == 0x1a) or (arg == 0x1e) or
         // next word (literal)
         (arg == 0x1f) then
-      pc = pc + 1
+      try
+        let st = (_state = None) as CPUState iso^
+        st.pc = st.pc + 1
+        _state = consume st
+      end
     end
 
 
@@ -243,7 +302,7 @@ class CPU
     let bv = readArg(b, false)
     (let res, let carry) = op(av, bv)
     writeArg(b, res)
-    ex = carry
+    try (_state as CPUState iso).ex = carry end
 
   fun ref _math(a: U16, b: U16, op: {(U16, U16): U16} val) =>
     let av = readArg(a)
@@ -315,7 +374,7 @@ class CPU
   fun ref _branch(a: U16, b: U16, op: {(U16, U16): Bool} val) =>
     let av = readArg(a)
     let bv = readArg(b)
-    skipping = not op(av, bv)
+    _skipping = not op(av, bv)
 
   fun ref op_ifb(a: U16, b: U16) => _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     (av and bv) != 0
@@ -344,71 +403,105 @@ class CPU
 
 
   fun ref op_adx(a: U16, b: U16) =>
-    let av = readArg(a)
-    let bv = readArg(b, false)
-    let res = bv.u32() + av.u32() + ex.u32()
-    writeArg(b, res.u16())
-    ex = if res > 0xffff then 1 else 0 end
+    try
+      let av = readArg(a)
+      let bv = readArg(b, false)
+      let res = bv.u32() + av.u32() + (_state as CPUState iso).ex.u32()
+      writeArg(b, res.u16())
+      (_state as CPUState iso).ex = if res > 0xffff then 1 else 0 end
+    end
 
   // TODO: Double-check these two are correct, especially SBX.
   fun ref op_sbx(a: U16, b: U16) =>
-    let av = readArg(a)
-    let bv = readArg(b, false)
-    let res = ((0x10000 or bv.u32()) - av.u32()) + ex.u32()
-    writeArg(b, res.u16())
-    ex = if (res and 0xffff0000) == 0 then 0 else 0xffff end
+    try
+      let av = readArg(a)
+      let bv = readArg(b, false)
+      let res = ((0x10000 or bv.u32()) - av.u32()) + (_state as CPUState iso).ex.u32()
+      writeArg(b, res.u16())
+      (_state as CPUState iso).ex = if (res and 0xffff0000) == 0 then 0 else 0xffff end
+    end
 
   fun ref op_sti(a: U16, b: U16) =>
     writeArg(b, readArg(a))
     try
-      regs(6) = regs(6) + 1
-      regs(7) = regs(7) + 1
+      let st = (_state = None) as CPUState iso^
+      st.regs(6) = st.regs(6) + 1
+      st.regs(7) = st.regs(7) + 1
+      _state = consume st
     end
 
   fun ref op_std(a: U16, b: U16) =>
     writeArg(b, readArg(a))
     try
-      regs(6) = regs(6) - 1
-      regs(7) = regs(7) - 1
+      let st = (_state = None) as CPUState iso^
+      st.regs(6) = st.regs(6) - 1
+      st.regs(7) = st.regs(7) - 1
+      _state = consume st
     end
 
 
   // Special opcodes
   fun ref op_jsr(a: U16) =>
-    push(pc)
-    pc = readArg(a)
+    try
+      push((_state as CPUState iso).pc)
+      (_state as CPUState iso).pc = readArg(a)
+    end
 
   fun ref op_int(a: U16) =>
     // Queue up the given interrupt.
     _intQueue.push(readArg(a))
 
-  fun ref op_iag(a: U16) => writeArg(a, ia)
-  fun ref op_ias(a: U16) => ia = readArg(a)
+  fun ref op_iag(a: U16) => try writeArg(a, (_state as CPUState iso).ia) end
+  fun ref op_ias(a: U16) => try (_state as CPUState iso).ia = readArg(a) end
 
   fun ref op_rfi(a: U16) =>
     readArg(a) // Throw away the value.
     _intQueueing = false
-    try regs(0) = pop() end
-    pc = pop()
+    try
+      (_state as CPUState iso).regs(0) = pop()
+      (_state as CPUState iso).pc = pop()
+    end
 
   fun ref op_iaq(a: U16) =>
     _intQueueing = readArg(a) == 0
 
-  // TODO: Implement these three properly, once hardware is supported.
   fun ref op_hwn(a: U16) =>
-    writeArg(a, 0)
+    writeArg(a, _hardware.size().u16())
 
   fun ref op_hwq(a: U16) =>
     let index = readArg(a)
+    let hw = try _hardware(index.usize()) end
+
     try
-      regs(0) = 0
-      regs(1) = 0
-      regs(2) = 0
-      regs(3) = 0
-      regs(4) = 0
+      let st = (_state = None) as CPUState iso^
+      match hw
+      | None =>
+        st.regs(0) = 0
+        st.regs(1) = 0
+        st.regs(2) = 0
+        st.regs(3) = 0
+        st.regs(4) = 0
+        _state = consume st
+        _continue() // Need to call this, since this op is sometimes async.
+      | let d: Device tag =>
+        d.hardwareInfo(consume st) // Will eventually call run()
+      end
     end
 
+
   fun ref op_hwi(a: U16) =>
-    readArg(a)
+    let index = readArg(a)
+    let hw = try _hardware(index.usize()) end
+
+    try
+      let st = (_state = None) as CPUState iso^
+      match hw
+      | None => // No such hardware, do nothing.
+        _state = consume st
+        _continue() // Need to call this, since this op is sometimes async.
+      | let d: Device tag =>
+        d.interrupt(consume st) // Will eventually call run()
+      end
+    end
 
 
