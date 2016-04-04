@@ -2,6 +2,8 @@ use "hw"
 use "files"
 use "collections"
 
+use "debug"
+
 class CPUState
   var mem: Array[U16] iso
   var regs: Array[U16] iso = recover iso Array[U16].init(where from = 0, len = 8) end
@@ -32,6 +34,10 @@ actor CPU
   let _env: Env
 
   var _hardware: Array[Device tag]
+
+  let fmtWord: FormatSettingsInt = FormatSettingsInt.set_format(FormatHexBare)
+      .set_width(4)
+      .set_fill('0')
 
   new fromFile(env: Env, file: FilePath) =>
     _env = env
@@ -73,6 +79,7 @@ actor CPU
   //   calls it. Most ops are synchronous, so they just end by calling _continue
   //   Any async ops like HWI will eventually call run().
   be run(st: CPUState iso) =>
+    Debug("Top of run()")
     _tickHardware(0, consume st)
 
   fun ref _tickHardware(index: USize, st: CPUState iso) =>
@@ -114,8 +121,9 @@ actor CPU
   fun ref pcGet(): U16 =>
     try
       let pc = (_state as CPUState iso).pc
-      read(pc)
+      let ret = read(pc)
       (_state as CPUState iso).pc = pc + 1
+      ret
     else
       0
     end
@@ -150,7 +158,25 @@ actor CPU
 
   fun ref _execOp() =>
     // Read the word at PC, decode it, and call the right function.
-    let op = try read((_state as CPUState iso).pc) else 0 end
+    let pc = try (_state as CPUState iso).pc else 0 end
+    let op = pcGet()
+    Debug("Executing at " + pc.string(fmtWord) + ": " + op.string(fmtWord))
+    try
+      match _state = None
+      | None => error
+      | let st: CPUState iso =>
+        Debug("PC = " + st.pc.string(fmtWord) + " " +
+          "A = " + st.regs(0).string(fmtWord) + " " +
+          "B = " + st.regs(1).string(fmtWord) + " " +
+          "C = " + st.regs(2).string(fmtWord) + " " +
+          "X = " + st.regs(3).string(fmtWord) + " " +
+          "Y = " + st.regs(4).string(fmtWord) + " " +
+          "Z = " + st.regs(5).string(fmtWord) + " " +
+          "I = " + st.regs(6).string(fmtWord) + " " +
+          "J = " + st.regs(7).string(fmtWord))
+        _state = consume st
+      end
+    end
     let opcode = op and 31
     let a = (op >> 10) and 63
     let b = (op >> 5) and 31
@@ -182,6 +208,8 @@ actor CPU
       | 0x10 => op_hwn(a); _continue()
       | 0x11 => op_hwq(a) // Async, no continue
       | 0x12 => op_hwi(a) // Async, no continue
+      // Nonstandard, but useful
+      | 0x07 => op_hcf(a); _continue()
       else
         _env.out.print("ERROR: Illegal special opcode " + b.string())
       end
@@ -309,65 +337,80 @@ actor CPU
     let bv = readArg(b, false)
     writeArg(b, op(av, bv))
 
-  fun ref op_set(a: U16, b: U16) => writeArg(b, readArg(a))
+  fun ref op_set(a: U16, b: U16) =>Debug("op_set: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); writeArg(b, readArg(a))
 
-  fun ref op_add(a: U16, b: U16) => _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_add(a: U16, b: U16) =>Debug("op_add: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     let res = av.u32() + bv.u32()
     ((res and 0xffff).u16(), if res >= 0x10000 then 1 else 0 end)
   end)
 
-  fun ref op_sub(a: U16, b: U16) => _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_sub(a: U16, b: U16) =>Debug("op_sub: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     let res = bv.u32() - av.u32()
     ((res and 0xffff).u16(), if (res and 0x80000000) == 0 then 0 else 0xffff end)
   end)
 
-  fun ref op_mul(a: U16, b: U16) => _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_mul(a: U16, b: U16) =>Debug("op_mul: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     let res = av.u32() * bv.u32()
     ((res and 0xffff).u16(), (res >> 16).u16())
   end)
 
-  fun ref op_mli(a: U16, b: U16) => _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_mli(a: U16, b: U16) =>Debug("op_mli: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     let res = av.i16().i32() * bv.i16().i32()
     ((res and 0xffff).u16(), (res >> 16).u16())
   end)
 
-  fun ref op_div(a: U16, b: U16) => _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_div(a: U16, b: U16) =>Debug("op_div: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     if av == 0 then (0, 0) else
       (bv / av, ((bv.u32() << 16) / av.u32()).u16())
     end
   end)
 
-  fun ref op_dvi(a: U16, b: U16) => _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_dvi(a: U16, b: U16) =>Debug("op_dvi: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     if av == 0 then (0, 0) else
       ((bv.i16() / av.i16()).u16(), ((bv.i16().i32() << 16) / av.i16().i32()).u16())
     end
   end)
 
-  fun ref op_mod(a: U16, b: U16) => _math(a, b, lambda(av: U16, bv: U16): U16 =>
+  fun ref op_mod(a: U16, b: U16) =>Debug("op_mod: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
     if av == 0 then 0 else bv % av end
   end)
 
-  fun ref op_mdi(a: U16, b: U16) => _math(a, b, lambda(av: U16, bv: U16): U16 =>
+  fun ref op_mdi(a: U16, b: U16) =>Debug("op_mdi: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
     if av == 0 then 0 else (bv.i16() / av.i16()).u16() end
   end)
 
-  fun ref op_and(a: U16, b: U16) => _math(a, b, lambda(av: U16, bv: U16): U16 =>
+  fun ref op_and(a: U16, b: U16) =>Debug("op_and: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
     av and bv
   end)
-  fun ref op_bor(a: U16, b: U16) => _math(a, b, lambda(av: U16, bv: U16): U16 =>
+  fun ref op_bor(a: U16, b: U16) =>Debug("op_bor: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
     av or bv
   end)
-  fun ref op_xor(a: U16, b: U16) => _math(a, b, lambda(av: U16, bv: U16): U16 =>
+  fun ref op_xor(a: U16, b: U16) =>Debug("op_xor: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
     av xor bv
   end)
 
-  fun ref op_shr(a: U16, b: U16) => _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_shr(a: U16, b: U16) =>Debug("op_shr: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     (bv >> av, ((bv.u32() << 16) >> av.u32()).u16())
   end)
-  fun ref op_asr(a: U16, b: U16) => _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_asr(a: U16, b: U16) =>Debug("op_asr: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     ((bv.i16() >> av.i16()).u16(), ((bv.i16().i32() << 16) >> av.u32().i32()).u16())
   end)
-  fun ref op_shl(a: U16, b: U16) => _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_shl(a: U16, b: U16) =>Debug("op_shl: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     (bv << av, ((bv.u32() << av.u32()) >> 16).u16())
   end)
 
@@ -376,33 +419,42 @@ actor CPU
     let bv = readArg(b)
     _skipping = not op(av, bv)
 
-  fun ref op_ifb(a: U16, b: U16) => _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ifb(a: U16, b: U16) =>Debug("op_ifb: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     (av and bv) != 0
   end)
-  fun ref op_ifc(a: U16, b: U16) => _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ifc(a: U16, b: U16) =>Debug("op_ifc: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     (av and bv) == 0
   end)
-  fun ref op_ife(a: U16, b: U16) => _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ife(a: U16, b: U16) =>Debug("op_ife: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     av == bv
   end)
-  fun ref op_ifn(a: U16, b: U16) => _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ifn(a: U16, b: U16) =>Debug("op_ifn: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     av != bv
   end)
-  fun ref op_ifg(a: U16, b: U16) => _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ifg(a: U16, b: U16) =>Debug("op_ifg: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     bv > av
   end)
-  fun ref op_ifa(a: U16, b: U16) => _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ifa(a: U16, b: U16) =>Debug("op_ifa: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     bv.i16() > av.i16()
   end)
-  fun ref op_ifl(a: U16, b: U16) => _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ifl(a: U16, b: U16) =>Debug("op_ifl: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     bv < av
   end)
-  fun ref op_ifu(a: U16, b: U16) => _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ifu(a: U16, b: U16) =>Debug("op_ifu: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     bv.i16() < av.i16()
   end)
 
 
-  fun ref op_adx(a: U16, b: U16) =>
+  fun ref op_adx(a: U16, b: U16) =>Debug("op_adx: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord))
     try
       let av = readArg(a)
       let bv = readArg(b, false)
@@ -412,7 +464,8 @@ actor CPU
     end
 
   // TODO: Double-check these two are correct, especially SBX.
-  fun ref op_sbx(a: U16, b: U16) =>
+  fun ref op_sbx(a: U16, b: U16) =>Debug("op_sbx: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord))
     try
       let av = readArg(a)
       let bv = readArg(b, false)
@@ -421,7 +474,8 @@ actor CPU
       (_state as CPUState iso).ex = if (res and 0xffff0000) == 0 then 0 else 0xffff end
     end
 
-  fun ref op_sti(a: U16, b: U16) =>
+  fun ref op_sti(a: U16, b: U16) =>Debug("op_sti: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord))
     writeArg(b, readArg(a))
     try
       let st = (_state = None) as CPUState iso^
@@ -430,7 +484,8 @@ actor CPU
       _state = consume st
     end
 
-  fun ref op_std(a: U16, b: U16) =>
+  fun ref op_std(a: U16, b: U16) =>Debug("op_std: " + a.string(fmtWord) + ", " +
+  b.string(fmtWord))
     writeArg(b, readArg(a))
     try
       let st = (_state = None) as CPUState iso^
@@ -441,20 +496,20 @@ actor CPU
 
 
   // Special opcodes
-  fun ref op_jsr(a: U16) =>
+  fun ref op_jsr(a: U16) =>Debug("op_jsr: " + a.string(fmtWord))
     try
       push((_state as CPUState iso).pc)
       (_state as CPUState iso).pc = readArg(a)
     end
 
-  fun ref op_int(a: U16) =>
+  fun ref op_int(a: U16) =>Debug("op_int: " + a.string(fmtWord))
     // Queue up the given interrupt.
     _intQueue.push(readArg(a))
 
-  fun ref op_iag(a: U16) => try writeArg(a, (_state as CPUState iso).ia) end
-  fun ref op_ias(a: U16) => try (_state as CPUState iso).ia = readArg(a) end
+  fun ref op_iag(a: U16) =>Debug("op_iag: " + a.string(fmtWord)); try writeArg(a, (_state as CPUState iso).ia) end
+  fun ref op_ias(a: U16) =>Debug("op_ias: " + a.string(fmtWord)); try (_state as CPUState iso).ia = readArg(a) end
 
-  fun ref op_rfi(a: U16) =>
+  fun ref op_rfi(a: U16) =>Debug("op_rfi: " + a.string(fmtWord))
     readArg(a) // Throw away the value.
     _intQueueing = false
     try
@@ -462,13 +517,13 @@ actor CPU
       (_state as CPUState iso).pc = pop()
     end
 
-  fun ref op_iaq(a: U16) =>
+  fun ref op_iaq(a: U16) =>Debug("op_iaq: " + a.string(fmtWord))
     _intQueueing = readArg(a) == 0
 
-  fun ref op_hwn(a: U16) =>
+  fun ref op_hwn(a: U16) =>Debug("op_hwn: " + a.string(fmtWord))
     writeArg(a, _hardware.size().u16())
 
-  fun ref op_hwq(a: U16) =>
+  fun ref op_hwq(a: U16) =>Debug("op_hwq: " + a.string(fmtWord))
     let index = readArg(a)
     let hw = try _hardware(index.usize()) end
 
@@ -489,7 +544,7 @@ actor CPU
     end
 
 
-  fun ref op_hwi(a: U16) =>
+  fun ref op_hwi(a: U16) =>Debug("op_hwi: " + a.string(fmtWord))
     let index = readArg(a)
     let hw = try _hardware(index.usize()) end
 
@@ -504,4 +559,8 @@ actor CPU
       end
     end
 
+  fun ref op_hcf(a: U16) =>Debug("op_hcf: " + a.string(fmtWord))
+    let code = readArg(a)
+    _env.out.print("[Halt and catch fire: " + code.string(fmtWord) + "]")
+    @exit[None](I32(0))
 
