@@ -15,8 +15,7 @@ set push, y
 set x, a
 set y, b
 :emit_string_loop
-set a, x
-set b, y
+set a, [x]
 jsr emit
 add x, 1
 sub y, 1
@@ -28,14 +27,28 @@ set x, pop
 set pc, pop
 
 
+:emit_cstring ; A = address C-style null-terminated string
+set push, x
+set x, a
+:emit_cstring_loop
+set a, [x]
+ife a, 0
+  set pc, emit_cstring_done
+jsr emit
+add x, 1
+set pc, emit_cstring_loop
+
+:emit_cstring_done
+set x, pop
+set pc, pop
+
 
 :test_string
-DAT "Hello, DCPU!"
+DAT "Hello, DCPU!", 0
 
 :main
 set a, test_string
-set b, 12
-jsr emit_string
+jsr emit_cstring
 set a, 10
 jsr emit
 

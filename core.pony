@@ -79,7 +79,6 @@ actor CPU
   //   calls it. Most ops are synchronous, so they just end by calling _continue
   //   Any async ops like HWI will eventually call run().
   be run(st: CPUState iso) =>
-    Debug("Top of run()")
     _tickHardware(0, consume st)
 
   fun ref _tickHardware(index: USize, st: CPUState iso) =>
@@ -173,7 +172,8 @@ actor CPU
           "Y = " + st.regs(4).string(fmtWord) + " " +
           "Z = " + st.regs(5).string(fmtWord) + " " +
           "I = " + st.regs(6).string(fmtWord) + " " +
-          "J = " + st.regs(7).string(fmtWord))
+          "J = " + st.regs(7).string(fmtWord) + " " +
+          "SP = " + st.sp.string(fmtWord))
         _state = consume st
       end
     end
@@ -193,7 +193,13 @@ actor CPU
       // If the operation skipping was a branch (0x10 <= opcode < 0x18) then we
       // continue skipping.
       _skipping = (0x10 <= opcode) and (opcode < 0x18)
-      return
+
+      match _state = None
+      | let st: CPUState iso => run(consume st)
+      else
+        _env.out.print("Skipping an instruction, but _state was not defined.")
+        @exit[None](I32(2))
+      end
     end
 
     if opcode == 0 then
@@ -337,80 +343,80 @@ actor CPU
     let bv = readArg(b, false)
     writeArg(b, op(av, bv))
 
-  fun ref op_set(a: U16, b: U16) =>Debug("op_set: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); writeArg(b, readArg(a))
+  fun ref op_set(a: U16, b: U16) =>Debug("op_set: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); writeArg(b, readArg(a))
 
-  fun ref op_add(a: U16, b: U16) =>Debug("op_add: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_add(a: U16, b: U16) =>Debug("op_add: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     let res = av.u32() + bv.u32()
     ((res and 0xffff).u16(), if res >= 0x10000 then 1 else 0 end)
   end)
 
-  fun ref op_sub(a: U16, b: U16) =>Debug("op_sub: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_sub(a: U16, b: U16) =>Debug("op_sub: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     let res = bv.u32() - av.u32()
     ((res and 0xffff).u16(), if (res and 0x80000000) == 0 then 0 else 0xffff end)
   end)
 
-  fun ref op_mul(a: U16, b: U16) =>Debug("op_mul: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_mul(a: U16, b: U16) =>Debug("op_mul: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     let res = av.u32() * bv.u32()
     ((res and 0xffff).u16(), (res >> 16).u16())
   end)
 
-  fun ref op_mli(a: U16, b: U16) =>Debug("op_mli: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_mli(a: U16, b: U16) =>Debug("op_mli: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     let res = av.i16().i32() * bv.i16().i32()
     ((res and 0xffff).u16(), (res >> 16).u16())
   end)
 
-  fun ref op_div(a: U16, b: U16) =>Debug("op_div: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_div(a: U16, b: U16) =>Debug("op_div: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     if av == 0 then (0, 0) else
       (bv / av, ((bv.u32() << 16) / av.u32()).u16())
     end
   end)
 
-  fun ref op_dvi(a: U16, b: U16) =>Debug("op_dvi: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_dvi(a: U16, b: U16) =>Debug("op_dvi: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     if av == 0 then (0, 0) else
       ((bv.i16() / av.i16()).u16(), ((bv.i16().i32() << 16) / av.i16().i32()).u16())
     end
   end)
 
-  fun ref op_mod(a: U16, b: U16) =>Debug("op_mod: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
+  fun ref op_mod(a: U16, b: U16) =>Debug("op_mod: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
     if av == 0 then 0 else bv % av end
   end)
 
-  fun ref op_mdi(a: U16, b: U16) =>Debug("op_mdi: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
+  fun ref op_mdi(a: U16, b: U16) =>Debug("op_mdi: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
     if av == 0 then 0 else (bv.i16() / av.i16()).u16() end
   end)
 
-  fun ref op_and(a: U16, b: U16) =>Debug("op_and: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
+  fun ref op_and(a: U16, b: U16) =>Debug("op_and: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
     av and bv
   end)
-  fun ref op_bor(a: U16, b: U16) =>Debug("op_bor: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
+  fun ref op_bor(a: U16, b: U16) =>Debug("op_bor: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
     av or bv
   end)
-  fun ref op_xor(a: U16, b: U16) =>Debug("op_xor: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
+  fun ref op_xor(a: U16, b: U16) =>Debug("op_xor: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
     av xor bv
   end)
 
-  fun ref op_shr(a: U16, b: U16) =>Debug("op_shr: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_shr(a: U16, b: U16) =>Debug("op_shr: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     (bv >> av, ((bv.u32() << 16) >> av.u32()).u16())
   end)
-  fun ref op_asr(a: U16, b: U16) =>Debug("op_asr: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_asr(a: U16, b: U16) =>Debug("op_asr: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     ((bv.i16() >> av.i16()).u16(), ((bv.i16().i32() << 16) >> av.u32().i32()).u16())
   end)
-  fun ref op_shl(a: U16, b: U16) =>Debug("op_shl: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
+  fun ref op_shl(a: U16, b: U16) =>Debug("op_shl: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _mathEx(a, b, lambda(av: U16, bv: U16): (U16, U16) =>
     (bv << av, ((bv.u32() << av.u32()) >> 16).u16())
   end)
 
@@ -419,42 +425,44 @@ actor CPU
     let bv = readArg(b)
     _skipping = not op(av, bv)
 
-  fun ref op_ifb(a: U16, b: U16) =>Debug("op_ifb: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ifb(a: U16, b: U16) =>Debug("op_ifb: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     (av and bv) != 0
   end)
-  fun ref op_ifc(a: U16, b: U16) =>Debug("op_ifc: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ifc(a: U16, b: U16) =>Debug("op_ifc: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     (av and bv) == 0
   end)
-  fun ref op_ife(a: U16, b: U16) =>Debug("op_ife: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ife(a: U16, b: U16) =>Debug("op_ife: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+    Debug("op_ife innards: " + av.string() + " == " + bv.string() +
+    " is " + (av == bv).string())
     av == bv
   end)
-  fun ref op_ifn(a: U16, b: U16) =>Debug("op_ifn: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ifn(a: U16, b: U16) =>Debug("op_ifn: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     av != bv
   end)
-  fun ref op_ifg(a: U16, b: U16) =>Debug("op_ifg: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ifg(a: U16, b: U16) =>Debug("op_ifg: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     bv > av
   end)
-  fun ref op_ifa(a: U16, b: U16) =>Debug("op_ifa: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ifa(a: U16, b: U16) =>Debug("op_ifa: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     bv.i16() > av.i16()
   end)
-  fun ref op_ifl(a: U16, b: U16) =>Debug("op_ifl: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ifl(a: U16, b: U16) =>Debug("op_ifl: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     bv < av
   end)
-  fun ref op_ifu(a: U16, b: U16) =>Debug("op_ifu: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
+  fun ref op_ifu(a: U16, b: U16) =>Debug("op_ifu: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord)); _branch(a, b, lambda(av: U16, bv: U16): Bool =>
     bv.i16() < av.i16()
   end)
 
 
-  fun ref op_adx(a: U16, b: U16) =>Debug("op_adx: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord))
+  fun ref op_adx(a: U16, b: U16) =>Debug("op_adx: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord))
     try
       let av = readArg(a)
       let bv = readArg(b, false)
@@ -464,8 +472,8 @@ actor CPU
     end
 
   // TODO: Double-check these two are correct, especially SBX.
-  fun ref op_sbx(a: U16, b: U16) =>Debug("op_sbx: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord))
+  fun ref op_sbx(a: U16, b: U16) =>Debug("op_sbx: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord))
     try
       let av = readArg(a)
       let bv = readArg(b, false)
@@ -474,8 +482,8 @@ actor CPU
       (_state as CPUState iso).ex = if (res and 0xffff0000) == 0 then 0 else 0xffff end
     end
 
-  fun ref op_sti(a: U16, b: U16) =>Debug("op_sti: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord))
+  fun ref op_sti(a: U16, b: U16) =>Debug("op_sti: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord))
     writeArg(b, readArg(a))
     try
       let st = (_state = None) as CPUState iso^
@@ -484,8 +492,8 @@ actor CPU
       _state = consume st
     end
 
-  fun ref op_std(a: U16, b: U16) =>Debug("op_std: " + a.string(fmtWord) + ", " +
-  b.string(fmtWord))
+  fun ref op_std(a: U16, b: U16) =>Debug("op_std: " + b.string(fmtWord) + ", " +
+  a.string(fmtWord))
     writeArg(b, readArg(a))
     try
       let st = (_state = None) as CPUState iso^
