@@ -193,13 +193,8 @@ actor CPU
       // If the operation skipping was a branch (0x10 <= opcode < 0x18) then we
       // continue skipping.
       _skipping = (0x10 <= opcode) and (opcode < 0x18)
-
-      match _state = None
-      | let st: CPUState iso => run(consume st)
-      else
-        _env.out.print("Skipping an instruction, but _state was not defined.")
-        @exit[None](I32(2))
-      end
+      _continue()
+      return
     end
 
     if opcode == 0 then
@@ -391,7 +386,7 @@ actor CPU
 
   fun ref op_mdi(a: U16, b: U16) =>Debug("op_mdi: " + b.string(fmtWord) + ", " +
   a.string(fmtWord)); _math(a, b, lambda(av: U16, bv: U16): U16 =>
-    if av == 0 then 0 else (bv.i16() / av.i16()).u16() end
+    if av == 0 then 0 else (bv.i16() % av.i16()).u16() end
   end)
 
   fun ref op_and(a: U16, b: U16) =>Debug("op_and: " + b.string(fmtWord) + ", " +
