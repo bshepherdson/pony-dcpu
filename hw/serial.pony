@@ -21,6 +21,7 @@ trait Device
   be tick(index: USize, st: CPUState iso)
   be hardwareInfo(st: CPUState iso)
   be interrupt(st: CPUState iso)
+  be dispose()
 
 
 // This is an invented serial I/O device I made up for easy console debugging.
@@ -86,4 +87,7 @@ actor HWSerial is Device
     end
 
     _cpu.hardwareDone(index, consume st)
+
+  be dispose() =>
+    _env.input.dispose()
 

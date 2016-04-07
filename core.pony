@@ -101,6 +101,13 @@ actor CPU
   be hardwareDone(index: USize, st: CPUState iso) =>
     _tickHardware(index + 1, consume st)
 
+  be dispose() =>
+    """Tears down all hardware and kills the process."""
+    // Just wipe out the pointers to the hardware devices.
+    for h in _hardware.values() do
+      h.dispose()
+    end
+
   fun ref _exec() =>
     _checkInterrupts()
     _execOp()
@@ -210,7 +217,7 @@ actor CPU
       | 0x11 => op_hwq(a) // Async, no continue
       | 0x12 => op_hwi(a) // Async, no continue
       // Nonstandard, but useful
-      | 0x07 => op_hcf(a); _continue()
+      | 0x07 => op_hcf(a) // Deliberately no continue here.
       else
         _env.out.print("ERROR: Illegal special opcode " + b.string())
       end
@@ -566,5 +573,5 @@ actor CPU
   fun ref op_hcf(a: U16) =>Debug.err("op_hcf: " + a.string(fmtWord))
     let code = readArg(a)
     _env.out.print("[Halt and catch fire: " + code.string(fmtWord) + "]")
-    @exit[None](I32(0))
+    dispose()
 
