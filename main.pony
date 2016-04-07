@@ -9,7 +9,7 @@ actor Main
       return
     end
 
-    let fp = try FilePath(env.root, binary, caps) else
+    let fp = try FilePath(env.root as AmbientAuth, binary, caps) else
       env.out.print("Failed to locate binary file: '" + binary + "'")
       return
     end
