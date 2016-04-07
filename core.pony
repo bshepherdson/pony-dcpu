@@ -501,8 +501,9 @@ actor CPU
   // Special opcodes
   fun ref op_jsr(a: U16) =>Debug("op_jsr: " + a.string(fmtWord))
     try
+      let newPC = readArg(a)
       push((_state as CPUState iso).pc)
-      (_state as CPUState iso).pc = readArg(a)
+      (_state as CPUState iso).pc = newPC
     end
 
   fun ref op_int(a: U16) =>Debug("op_int: " + a.string(fmtWord))
