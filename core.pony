@@ -522,7 +522,7 @@ actor CPU
     end
 
   fun ref op_iaq(a: U16) =>Debug.err("op_iaq: " + a.string(fmtWord))
-    _intQueueing = readArg(a) == 0
+    _intQueueing = readArg(a) != 0
 
   fun ref op_hwn(a: U16) =>Debug.err("op_hwn: " + a.string(fmtWord))
     writeArg(a, _hardware.size().u16())
