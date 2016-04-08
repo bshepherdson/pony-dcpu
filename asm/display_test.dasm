@@ -1,0 +1,21 @@
+.equ vram, 0x8000
+
+; Fill the VRAM with 0-128 four times.
+:main
+set a, 0
+:loop
+set b, a
+and b, 0x7f
+set [a+vram], b
+add a, 1
+ifl a, 1024
+  set pc, loop
+
+; And map the screen to it.
+set a, 0
+set b, vram
+hwi [hw_monitor]
+
+; spin forever
+sub pc, 1
+

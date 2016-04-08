@@ -41,8 +41,9 @@ actor CPU
 
   new fromFile(env: Env, file: FilePath) =>
     _env = env
-    let serial: Device tag = HWSerial(env, this)
-    _hardware = [serial]
+    //let serial: Device tag = HWSerial(env, this)
+    let console: Device tag = HWConsole(env, this)
+    _hardware = [console]
     var m = recover Array[U16].init(where from = 0, len = 0x10000) end
     try
       with f = OpenFile(file) as File do

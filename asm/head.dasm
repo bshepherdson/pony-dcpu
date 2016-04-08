@@ -1,0 +1,2 @@
+; Default header for the top of all apps.
+set pc, _entry_point
