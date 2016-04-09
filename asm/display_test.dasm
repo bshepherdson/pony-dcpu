@@ -6,6 +6,17 @@ set a, 0
 :loop
 set b, a
 and b, 0x7f
+
+set c, a
+and c, 0xf
+shl c, 12
+bor b, c
+
+;set c, a
+;and c, 0xf0
+;shl c, 8
+;bor b, c
+
 set [a+vram], b
 add a, 1
 ifl a, 1024

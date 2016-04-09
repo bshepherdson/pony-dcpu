@@ -3,6 +3,7 @@
 // ASCII characters.
 
 use ".."
+use "collections"
 use "signals"
 use "time"
 
@@ -43,6 +44,11 @@ actor HWConsole is Device
 
   let _timers: Timers tag = Timers()
   let _timer: Timer tag
+
+  // See comments on _convertColor() for details.
+  let _colorMap: Array[U16] val = recover val [
+    0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5
+  ] end
 
 
   new create(env: Env, cpu: CPU tag) =>
@@ -137,16 +143,38 @@ actor HWConsole is Device
     // Don't actually clear it - that causes unnecessary flickering.
     _env.out.write("\x1b[H")
 
+    (var state, let palette) = _fetchPalette(consume st)
+
     // Read from the mapped area of memory and write each character. Colours are
     // currently ignored.
     try
+      var currentFG: U16 = 0xff
+      var currentBG: U16 = 0xff
+      var c: U16 = 0
       var row: USize = 0
       while row < 12 do
         var col: USize = 0
         while col < 32 do
           // Mask off the colours and such.
-          let char = 0x7f and st.mem(_screenMap.usize() + (row * 32) + col)
-          let str = _defaultFont(char.usize())
+          let char = state.mem(_screenMap.usize() + (row * 32) + col)
+          let str = _defaultFont((char and 0x7f).usize())
+
+          // Before writing the character, determine the color codes and set
+          // them, if they differ from the current cursor setting.
+          let fgNumber = (char >> 12) and 0xf
+          if fgNumber != currentFG then
+            currentFG = fgNumber
+            c = _colorConversion(palette(fgNumber.usize()))
+            _env.out.write("\x1b[38;5;" + c.string() + "m")
+          end
+
+          let bgNumber = (char >>  8) and 0xf
+          if bgNumber != currentBG then
+            currentBG = bgNumber
+            c = _colorConversion(palette(bgNumber.usize()))
+            _env.out.write("\x1b[48;5;" + c.string() + "m")
+          end
+
           _env.out.write(str)
           col = col + 1
         end
@@ -154,7 +182,7 @@ actor HWConsole is Device
         row = row + 1
       end
     end
-    consume st
+    consume state
 
 
   be dispose() =>
@@ -162,10 +190,47 @@ actor HWConsole is Device
     _timers.cancel(_timer)
 
 
+  // Converts from DCPU-16 color descriptions into 256-color terminal codes.
+  // Those codes (at least, the ones from 16 to 231) are a 6-level series:
+  // 00, 5f, 87, af, d7, ff; blue then green then red.
+  // For now I'll just let the colors map fairly directly:
+  // 0-1: 00: 0
+  // 2-5: 5f: 1
+  // 6-8: 87: 2
+  // 9-b: af: 3
+  // c-e: d7: 4
+  // f:   ff: 5
+  fun _colorConversion(color: U16): U16 =>
+    // Extract the red, green and blue portions.
+    try
+      let r = _colorMap(((color >> 8) and 0xf).usize())
+      let g = _colorMap(((color >> 4) and 0xf).usize())
+      let b = _colorMap(((color     ) and 0xf).usize())
+      (r * 36) + (g * 6) + b + 16
+    else
+      0
+    end
+
+  fun _fetchPalette(st: CPUState iso): (CPUState iso^, Array[U16] box) =>
+    if _paletteMap != 0 then
+      var pal = Array[U16]()
+      try
+        for i in Range[USize](0, 16) do
+          pal.push(st.mem(i + _paletteMap.usize()))
+        end
+      end
+      (consume st, pal)
+    else
+      (consume st, _defaultPalette)
+    end
+
+
+
+
   fun tag _mkDefaultPalette(): Array[U16] val =>
     recover val [
       0x0000, 0x000a, 0x00a0, 0x00aa,
-      0x0a00, 0x0a0a, 0x0a50, 0x0aaa,
+      0x0a00, 0x0a0a, 0x0aa0, 0x0aaa,
       0x0555, 0x055f, 0x05f5, 0x05ff,
       0x0f55, 0x0f5f, 0x0ff5, 0x0fff
     ] end
