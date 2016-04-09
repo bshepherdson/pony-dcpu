@@ -148,6 +148,7 @@ set pc, pop
 
 
 :new_line ; ()
+set [_cursor_col], 0
 set pc, _emit_new_line ; tail call
 
 
@@ -182,8 +183,8 @@ mod a, 10
 add a, 48 ; '0'
 set [y], a
 add y, 1
-div a, 10
-ifn a, 0
+div x, 10
+ifn x, 0
   set pc, _print_uint_loop
 
 ; Walk backward from Y-1 to the start of the _print_buffer, emitting.
