@@ -1,0 +1,66 @@
+; Main asm file
+; Looks up hardware and assigns their numbers to a set of globals.
+; Also sets up an interrupt handler system.
+
+; -1 indicates not supported.
+:hw_monitor
+DAT -1
+:hw_keyboard
+DAT -1
+
+:index_hardware
+hwn j
+:index_hardware_loop
+ife j, 0
+  set pc, index_hardware_done
+
+sub j, 1
+hwq j ; BA = hardware ID, YX = vendor ID, C = version
+
+; Check if it's the LEM 1802
+ife b, 0x7349
+ife a, 0xf615
+ife y, 0x1c6c
+ife x, 0x8b36
+ife c, 0x1802
+  set [hw_monitor], j
+
+set pc, index_hardware_loop
+
+:index_hardware_done
+set pc, pop
+
+
+
+; Interrupt system
+; Supports 16 interrupt messages, and vectors to your handlers.
+; Call set_interrupt_for(msg, handler) for each one.
+; A is still the message when the handler is called, so they can be duplicated.
+:interrupt_vector
+DAT 0, 0, 0, 0, 0, 0, 0, 0
+DAT 0, 0, 0, 0, 0, 0, 0, 0
+
+:set_interrupt_for ; A = interrupt number, B = handler
+set [a + interrupt_vector], b
+set pc, pop
+
+:_interrupt_handler
+ifg a, 15
+  rfi 0
+ifn [a + interrupt_vector], 0
+  set pc, [a + interrupt_vector]
+rfi 0
+
+:init_interrupts
+ias _interrupt_handler
+iaq 0
+set pc, pop
+
+
+; This is the actual boot location, which sets up hardware before calling
+; through to the user's main.
+:_entry_point
+jsr index_hardware
+jsr init_interrupts
+set pc, main
+

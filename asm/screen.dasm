@@ -1,0 +1,202 @@
+; Library for managing the screen. Supports scrolling efficiently using a
+; sliding window, and can handle colours.
+; TODO: Customizable colour palette.
+
+; A single screen takes up 32 words per line, 12 lines tall. To support the
+; sliding window, 23 lines are needed. VRAM is 32*23 = 736 = 0x2e0 long.
+; Therefore, leaving 1K for the stack at the top of memory, VRAM begins safely
+; at 0xf800.
+.equ vram, 0xf800
+
+.equ rows, 12
+.equ cols, 32
+
+.equ scroll_top, 24
+
+; Global variables
+;==================================================================
+; These are intended to be private to this module.
+
+; The cursor coordinates, relative the current scroll position.
+:_cursor_row DAT 0
+:_cursor_col DAT 0
+
+; Set this to 0 to lock the scrolling, nonzero to allow it.
+; Scrolling defaults to on.
+:_scrolling DAT 1
+; Row currently at the top of the visible area.
+:_scroll_pos DAT 0
+
+; Currently selected colors.
+; These are pre-shifted.
+:_color_fg DAT 0xf000 ; white
+:_color_bg DAT 0x0000 ; black
+
+
+; Internal functions
+;===================================================================
+
+:_emit_new_line ; ()
+add [_cursor_row], 1
+ifl [_cursor_row], rows
+  set pc, pop
+
+; We reached the bottom. Two cases: if scrolling is enabled, do scrolling.
+; If not, just move the row back one and overwrite it.
+ifn [_scrolling], 0
+  jsr _bump_scroll
+; Either way, we need to bump the cursor back one row.
+sub [_cursor_row], 1
+set pc, pop
+
+
+; Inserts a (fully constructed) character into the VRAM at the current cursor
+; position.
+:_emit ; (char-word)
+set b, [_cursor_row]
+add b, [_scroll_pos]
+mul b, cols
+add b, [_cursor_col]
+add b, vram
+set [b], a
+
+; Now move the cursor.
+add [_cursor_col], 1
+ifl [_cursor_col], cols
+  set pc, _emit_done
+
+set [_cursor_col], 0
+
+jsr _emit_new_line
+
+:_emit_done
+set pc, pop
+
+
+; Advances the scrolling by one step, or copies up to the top if necessary.
+:_bump_scroll ; ()
+set a, [_scroll_pos]
+add a, 1
+ifl a, scroll_top
+  set pc, _bump_scroll_good
+
+; Scroll back to the top.
+; Two steps here: copy the visible portion (minus the last line) to the top.
+; Then write spaces into the rest, to clear it.
+
+set a, 0
+:_bump_scroll_loop_1
+set [a + vram], [a + vram + (cols * (rows-1))] ; Hooray for constant folding!
+add a, 1
+ifl a, cols * (rows - 1)
+  set pc, _bump_scroll_loop_1
+
+set b, 32 ; space
+bor b, [_color_bg]
+bor b, [_color_fg]
+
+; A is already the first place that needs a space.
+:_bump_scroll_loop_2
+set [a + vram], b
+add a, 1
+ifl a, cols * scroll_top
+  set pc, _bump_scroll_loop_2
+
+set a, 0 ; New scroll position
+
+:_bump_scroll_good ; Expects A to be the new scroll position.
+set [_scroll_pos], a
+set b, a
+mul b, cols
+add b, vram
+set a, 0
+hwi [hw_monitor] ; Move the map to the new location.
+
+set pc, pop
+
+
+
+
+; User functions
+;===================================================================
+
+; Emits a given character with explicit colors.
+; Set a color of -1 to use the currently set colors.
+:emit_colored ; (char, fg, bg)
+shl c, 8
+shl b, 12
+bor a, c
+bor a, b
+set pc, _emit ; tail call
+
+
+:emit ; (char)
+bor a, [_color_fg]
+bor a, [_color_bg]
+set pc, _emit ; tail call
+
+
+:set_fg ; (palette number)
+shl a, 12
+set [_color_fg], a
+set pc, pop
+
+:set_bg ; (palette number)
+shl a, 8
+set [_color_bg], a
+set pc, pop
+
+
+:new_line ; ()
+set pc, _emit_new_line ; tail call
+
+
+
+:print_string ; (c-string)
+set push, x
+set x, a
+:_print_string_loop
+set a, [x]
+ife a, 0
+  set pc, _print_string_done
+jsr emit
+add x, 1
+set pc, _print_string_loop
+:_print_string_done
+set x, pop
+set pc, pop
+
+
+:_print_buffer
+DAT 0, 0, 0, 0, 0, 0
+
+:print_uint ; (number)
+set push, x
+set push, y
+set x, a
+set y, _print_buffer
+
+:_print_uint_loop
+set a, x
+mod a, 10
+add a, 48 ; '0'
+set [y], a
+add y, 1
+div a, 10
+ifn a, 0
+  set pc, _print_uint_loop
+
+; Walk backward from Y-1 to the start of the _print_buffer, emitting.
+sub y, 1
+:_print_uint_emit_loop
+set a, [y]
+jsr emit
+sub y, 1
+ifl y, _print_buffer
+  set pc, _print_uint_done
+set pc, _print_uint_emit_loop
+:_print_uint_done
+set y, pop
+set x, pop
+set pc, pop
+
