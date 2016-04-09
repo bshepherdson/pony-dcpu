@@ -6,6 +6,11 @@
 set a, test_string
 jsr print_string
 jsr new_line
+
+set a, 9
+jsr set_bg
+jsr clear_screen
+
 set a, 33989
 jsr print_uint
 sub pc, 1

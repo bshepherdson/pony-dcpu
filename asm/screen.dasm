@@ -152,6 +152,25 @@ set [_cursor_col], 0
 set pc, _emit_new_line ; tail call
 
 
+; Erases the screen and resets the cursor to (0,0)
+:clear_screen ; ()
+set [_cursor_row], 0
+set [_cursor_col], 0
+set [_scroll_pos], 0
+set a, vram
+set b, vram + (cols * scroll_top)
+set c, 32
+bor c, [_color_bg]
+bor c, [_color_fg]
+:_clear_loop
+set [a], c
+add a, 1
+ifl a, b
+  set pc, _clear_loop
+
+set pc, pop
+
+
 
 :print_string ; (c-string)
 set push, x
