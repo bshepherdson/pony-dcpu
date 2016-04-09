@@ -1,7 +1,9 @@
 ; Test routine that runs inside my budding OS.
 
+:test_string DAT "Hello, World!", 0
+
 :main
-set a, 65
-jsr emit
+set a, test_string
+jsr print_string
 sub pc, 1
 

@@ -62,5 +62,6 @@ set pc, pop
 :_entry_point
 jsr index_hardware
 jsr init_interrupts
+jsr init_screen
 set pc, main
 

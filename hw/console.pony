@@ -138,9 +138,10 @@ actor HWConsole is Device
       _cpu.hardwareDone(index, consume st)
     end
 
-  fun _paint(st: CPUState iso): CPUState iso^ =>
+  fun ref _paint(st: CPUState iso): CPUState iso^ =>
     // Move the cursor to the top-left.
     // Don't actually clear it - that causes unnecessary flickering.
+    _redrawNeeded = false
     _env.out.write("\x1b[H")
 
     (var state, let palette) = _fetchPalette(consume st)

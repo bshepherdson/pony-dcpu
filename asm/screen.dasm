@@ -200,3 +200,11 @@ set y, pop
 set x, pop
 set pc, pop
 
+
+; Sets up the VRAM mapping and enables the screen.
+:init_screen ;()
+set b, vram
+set a, 0
+hwi [hw_monitor]
+set pc, pop
+

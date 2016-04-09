@@ -6,7 +6,7 @@ default: all
 
 os: $(OS_FILES)
 	cat $(OS_FILES) > __temp.dasm
-	das -o test.bin __temp.dasm
+	das -o test.bin __temp.dasm -d --dumpfile test.dump
 	rm __temp.dasm
 
 all: os
