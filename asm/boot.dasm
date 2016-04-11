@@ -7,6 +7,8 @@
 DAT -1
 :hw_keyboard
 DAT -1
+:hw_clock
+DAT -1
 
 :index_hardware
 hwn j
@@ -24,6 +26,13 @@ ife y, 0x1c6c
 ife x, 0x8b36
 ife c, 0x1802
   set [hw_monitor], j
+
+; Check for the Generic Clock.
+; No manufacturer check for generic devices.
+ife b, 0x12d0
+ife a, 0xb402
+ife c, 1
+  set [hw_clock], j
 
 set pc, index_hardware_loop
 

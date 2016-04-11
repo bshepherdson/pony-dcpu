@@ -147,6 +147,12 @@ set [_color_bg], a
 set pc, pop
 
 
+:move_cursor ; (row, col)
+set [_cursor_row], a
+set [_cursor_col], b
+set pc, pop
+
+
 :new_line ; ()
 set [_cursor_col], 0
 set pc, _emit_new_line ; tail call
