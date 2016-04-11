@@ -1,39 +1,30 @@
 ; Test routine that runs inside my budding OS.
 
-.equ int_timer, 1
+.equ int_keyboard, 1
 
 :main
-; Set up the timer interrupt.
-set a, int_timer
-set b, handler_timer
+; Set up the keyboard interrupt.
+set a, int_keyboard
+set b, handler_keyboard
 jsr set_interrupt_for
 
-set b, int_timer
-set a, 2
-hwi [hw_clock]
-
-set b, 30
-set a, 0
-hwi [hw_clock]
+set b, int_keyboard
+set a, 3
+hwi [hw_keyboard]
 
 sub pc, 1
 
-:clock_ticks dat 0
 
-
-:handler_timer
+:handler_keyboard
 set push, b
 set push, c
-set a, 0
-set b, 0
-jsr move_cursor
+set a, 1
+hwi [hw_keyboard]
 
-set a, [clock_ticks]
-add a, 1
-set [clock_ticks], a
-jsr print_uint
-
+; C is now the last character typed.
+; Emit it back.
+set a, c
+jsr emit
 set c, pop
 set b, pop
 rfi 0
-

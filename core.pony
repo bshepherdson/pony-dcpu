@@ -44,7 +44,8 @@ actor CPU
     //let serial: Device tag = HWSerial(env, this)
     let console: Device tag = HWConsole(env, this)
     let clock: Device tag = HWClock(env, this)
-    _hardware = [console, clock]
+    let keyboard: Device tag = HWKeyboard(env, this)
+    _hardware = [console, clock, keyboard]
     var m = recover Array[U16].init(where from = 0, len = 0x10000) end
     try
       with f = OpenFile(file) as File do

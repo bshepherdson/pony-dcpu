@@ -34,6 +34,13 @@ ife a, 0xb402
 ife c, 1
   set [hw_clock], j
 
+; Check for the Generic Keyboard.
+; No manufacturer check for generic devices.
+ife b, 0x30cf
+ife a, 0x7406
+ife c, 1
+  set [hw_keyboard], j
+
 set pc, index_hardware_loop
 
 :index_hardware_done
