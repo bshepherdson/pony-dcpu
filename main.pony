@@ -5,7 +5,7 @@ actor Main
     let caps = recover val FileCaps.set(FileRead).set(FileStat) end
 
     let binary = try env.args(1) else
-      env.out.print("Usage: ./dcpu <binary>")
+      env.out.print("Usage: ./dcpu <binary> [-d disk_image]")
       return
     end
 
