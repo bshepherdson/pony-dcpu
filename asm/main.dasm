@@ -1,30 +1,24 @@
 ; Test routine that runs inside my budding OS.
 
-.equ int_keyboard, 1
-
 :main
-; Set up the keyboard interrupt.
-set a, int_keyboard
-set b, handler_keyboard
-jsr set_interrupt_for
+set a, 0
+:main_loop
+set [a + 0x2000], a
+add a, 1
+ifl a, 0x2200
+  set pc, main_loop
 
-set b, int_keyboard
-set a, 3
-hwi [hw_keyboard]
+; Now write it to the disk.
+set a, 0x11
+set b, 0
+set c, 1
+set x, 0x2000
+hwi [hw_disk] ; Blocking mode
+
+set a, done_str
+jsr print_string
 
 sub pc, 1
 
+:done_str DAT "Done!", 0
 
-:handler_keyboard
-set push, b
-set push, c
-set a, 1
-hwi [hw_keyboard]
-
-; C is now the last character typed.
-; Emit it back.
-set a, c
-jsr emit
-set c, pop
-set b, pop
-rfi 0

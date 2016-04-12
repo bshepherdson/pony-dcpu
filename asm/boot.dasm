@@ -9,6 +9,8 @@ DAT -1
 DAT -1
 :hw_clock
 DAT -1
+:hw_disk
+DAT -1
 
 :index_hardware
 hwn j
@@ -40,6 +42,14 @@ ife b, 0x30cf
 ife a, 0x7406
 ife c, 1
   set [hw_keyboard], j
+
+; Check for the Harold Media Drive.
+ife b, 0x74fa
+ife a, 0x4cae
+ife y, 0x2154
+ife x, 0x4948
+ife c, 0x07c2
+  set [hw_disk], j
 
 set pc, index_hardware_loop
 
